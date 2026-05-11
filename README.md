@@ -121,7 +121,7 @@ This project was built with the assistance of Claude Code. If you like the origi
 
 ```bash
 # Clone this fork
-git clone https://github.com/YOUR_USERNAME/foundry-vtt-mcp.git
+git clone https://github.com/LManfre/foundry-vtt-mcp.git
 cd foundry-vtt-mcp
 
 # Install dependencies and build
