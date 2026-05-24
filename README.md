@@ -119,7 +119,8 @@ Once connected, ask Claude Desktop:
 - **Character Management**: Access stats, abilities, inventory, and detailed entity information
 - **Token Manipulation**: Move, update, delete tokens and manage status conditions
 - **Enhanced Compendium Search**: Instant filtering by CR, type, abilities, and more
-- **Content Creation**: Generate actors, NPCs, and quest journals
+- **Content Creation**: Generate actors, NPCs, and quest journals (with optional folder organisation)
+- **World Item Management**: Create, list, and update world-level Items; attach items directly to actors
 - **Campaign Management**: Multi-part quest tracking with progress dashboards
 - **Interactive Dice System**: Send different dice roll requests to players from Claude
 - **Actor Ownership**: Manage player permissions for characters and tokens
@@ -166,7 +167,7 @@ Once connected, ask Claude Desktop:
 - **34** list-dsa5-archetypes (DSA5 Only)
 - **35** create-dsa5-character-from-archetype (DSA5 Only)
 - **36** create-campaign-dashboard
-- **37** add-actor-items
+- **37** manage-world-items (create / list / update world items, add items to actor)
 
 ## Settings
 
