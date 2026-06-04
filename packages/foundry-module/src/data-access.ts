@@ -6224,6 +6224,33 @@ export class FoundryDataAccess {
     const plan: Array<{ nameLower: string; type: string; setCurrent: boolean | undefined; source: string }> =
       [];
 
+    // Find every compendium entry whose name (and optional type) matches, across
+    // the candidate packs (their core-first order is preserved in the result).
+    const findMatches = async (
+      packs: any[],
+      searchName: string,
+      typeConstraint: string | undefined
+    ): Promise<Array<{ packId: string; packLabel: string; entryId: string; type: string }>> => {
+      const found: Array<{ packId: string; packLabel: string; entryId: string; type: string }> = [];
+      for (const pack of packs) {
+        const index = await getIndex(pack);
+        for (const entry of index) {
+          if (
+            entry.name?.toLowerCase() === searchName &&
+            (!typeConstraint || entry.type === typeConstraint)
+          ) {
+            found.push({
+              packId: pack.metadata.id,
+              packLabel: pack.metadata.label,
+              entryId: entry._id,
+              type: entry.type,
+            });
+          }
+        }
+      }
+      return found;
+    };
+
     for (const req of data.items) {
       const nameLower = req.name.toLowerCase();
       const typeWanted = req.type?.toLowerCase();
@@ -6233,20 +6260,23 @@ export class FoundryDataAccess {
           )
         : itemPacks;
 
-      const matches: Array<{ packId: string; packLabel: string; entryId: string; type: string }> = [];
-      for (const pack of searchPacks) {
-        const index = await getIndex(pack);
-        for (const entry of index) {
-          if (
-            entry.name?.toLowerCase() === nameLower &&
-            (!typeWanted || entry.type === typeWanted)
-          ) {
-            matches.push({
-              packId: pack.metadata.id,
-              packLabel: pack.metadata.label,
-              entryId: entry._id,
-              type: entry.type,
-            });
+      let matches = await findMatches(searchPacks, nameLower, typeWanted);
+
+      // Grouped-skill fallback: a specialisation like "Entertain (Taunt)" often
+      // has no dedicated entry, but the group's generic template "Entertain ()"
+      // does — copy that (it carries the correct characteristic and grouping)
+      // and rename the copy to the requested specialisation.
+      let nameOverride: string | undefined;
+      let templated = false;
+      if (matches.length === 0 && (typeWanted === undefined || typeWanted === 'skill')) {
+        const grouped = /^\s*(.+?)\s*\([^)]+\)\s*$/.exec(req.name);
+        if (grouped) {
+          const templateName = `${grouped[1]} ()`.toLowerCase();
+          const templateMatches = await findMatches(searchPacks, templateName, 'skill');
+          if (templateMatches.length > 0) {
+            matches = templateMatches;
+            nameOverride = req.name.trim();
+            templated = true;
           }
         }
       }
@@ -6288,8 +6318,9 @@ export class FoundryDataAccess {
       const pack = (game.packs as any).get(chosen.packId);
       const sourceDoc = await pack.getDocument(chosen.entryId);
       const obj = sourceDoc.toObject() as any;
+      const finalName = nameOverride ?? obj.name;
       const clean: Record<string, any> = {
-        name: obj.name,
+        name: finalName,
         type: obj.type,
         img: obj.img,
         system: obj.system || {},
@@ -6299,10 +6330,10 @@ export class FoundryDataAccess {
       applyExtras(clean, obj.type, req);
       toCreate.push(clean);
       plan.push({
-        nameLower: String(obj.name).toLowerCase(),
+        nameLower: String(finalName).toLowerCase(),
         type: obj.type,
         setCurrent: req.setCurrent,
-        source: chosen.packLabel,
+        source: templated ? `${chosen.packLabel} (grouped template)` : chosen.packLabel,
       });
     }
 
