@@ -89,6 +89,7 @@ export class QueryHandlers {
 
     // WFRP4e actor stat-block update
     CONFIG.queries[`${modulePrefix}.updateWfrp4eActor`] = this.handleUpdateWfrp4eActor.bind(this);
+    CONFIG.queries[`${modulePrefix}.addWfrp4eItems`] = this.handleAddWfrp4eItems.bind(this);
 
     // Token manipulation queries
     CONFIG.queries[`${modulePrefix}.moveToken`] = this.handleMoveToken.bind(this);
@@ -822,6 +823,35 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to update WFRP4e actor: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Add items (skills, talents, careers, trappings, …) to a WFRP4e actor,
+   * resolved from the installed compendiums. GM-only.
+   */
+  async handleAddWfrp4eItems(data: any): Promise<any> {
+    try {
+      // SECURITY: Silent GM validation
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!data.actor) {
+        throw new Error('actor (name or id) is required');
+      }
+      if (!Array.isArray(data.items) || data.items.length === 0) {
+        throw new Error('items array is required and must contain at least one entry');
+      }
+
+      return await this.dataAccess.addWfrp4eItems(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to add WFRP4e items: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

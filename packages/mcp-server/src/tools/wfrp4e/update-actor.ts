@@ -21,7 +21,14 @@ const updateActorSchema = z
   .object({
     actor: z.string().min(1),
     characteristics: z.record(z.string(), charFieldSchema).optional(),
-    wounds: z.object({ value: z.number().optional(), max: z.number().optional() }).strict().optional(),
+    wounds: z
+      .object({ value: z.number().optional(), max: z.number().optional() })
+      .strict()
+      .optional(),
+    skills: z
+      .array(z.object({ name: z.string().min(1), advances: z.number() }).strict())
+      .optional(),
+    career: z.string().min(1).optional(),
   })
   .strict();
 
@@ -56,12 +63,13 @@ export class WFRP4eUpdateActorTools {
         name: 'wfrp4e-update-actor',
         description:
           "[WFRP4e only] Update an existing actor's stat block: characteristic " +
-          'initial/advances/modifier and/or wounds (current value and max). Only the ' +
-          'fields you provide change; the characteristic Total and Bonus recompute ' +
-          'automatically. USE THIS to tweak a creature/NPC/PC you already have — e.g. ' +
-          'after cloning a creature to make a tougher variant. DO NOT use this to create ' +
-          'an actor (use create-actor-from-compendium) or to add/remove items, spells, ' +
-          'or talents (use manage-world-items).',
+          'initial/advances/modifier, wounds (current value and max), the advances on ' +
+          'skills the actor already has, and/or which career is current. Only the fields ' +
+          'you provide change; the characteristic Total/Bonus and skill totals recompute ' +
+          'automatically. USE THIS to tweak a creature/NPC/PC you already have — e.g. after ' +
+          'cloning a creature to make a tougher variant, or to advance a skill. To ADD a new ' +
+          'skill, talent, trait, trapping or career use wfrp4e-add-items; to create an actor ' +
+          'use create-actor-from-compendium.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -86,6 +94,30 @@ export class WFRP4eUpdateActorTools {
               },
               additionalProperties: false,
             },
+            skills: {
+              type: 'array',
+              description:
+                'Set advances on skills the actor ALREADY has. To add a new skill use ' +
+                'wfrp4e-add-items instead.',
+              items: {
+                type: 'object',
+                properties: {
+                  name: {
+                    type: 'string',
+                    description: 'Existing skill name (e.g. "Stealth (Rural)").',
+                  },
+                  advances: { type: 'number', description: 'Advances to set on the skill.' },
+                },
+                required: ['name', 'advances'],
+                additionalProperties: false,
+              },
+            },
+            career: {
+              type: 'string',
+              description:
+                "Name of an existing career item to make the actor's current career (the others " +
+                'are set non-current).',
+            },
           },
           required: ['actor'],
         },
@@ -102,9 +134,12 @@ export class WFRP4eUpdateActorTools {
       return { success: false, error: `Invalid arguments: ${detail}` };
     }
 
-    const { actor, characteristics, wounds } = parsed.data;
-    if (!characteristics && !wounds) {
-      return { success: false, error: 'Nothing to update: provide characteristics and/or wounds.' };
+    const { actor, characteristics, wounds, skills, career } = parsed.data;
+    if (!characteristics && !wounds && !skills?.length && !career) {
+      return {
+        success: false,
+        error: 'Nothing to update: provide characteristics, wounds, skills and/or career.',
+      };
     }
 
     // Surface unknown characteristic keys early (clearer than a silent skip).
@@ -126,6 +161,8 @@ export class WFRP4eUpdateActorTools {
         actor,
         characteristics,
         wounds,
+        skills,
+        career,
       });
     } catch (error) {
       this.logger.error('Failed to update WFRP4e actor', error);

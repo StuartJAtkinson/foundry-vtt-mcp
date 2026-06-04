@@ -5980,6 +5980,8 @@ export class FoundryDataAccess {
     actor: string;
     characteristics?: Record<string, { initial?: number; advances?: number; modifier?: number }>;
     wounds?: { value?: number; max?: number };
+    skills?: Array<{ name: string; advances: number }>;
+    career?: string;
   }): Promise<any> {
     this.validateFoundryState();
 
@@ -6007,9 +6009,16 @@ export class FoundryDataAccess {
     const FIELDS = ['initial', 'advances', 'modifier'] as const;
     const sys = actor.system || {};
     const update: Record<string, any> = {};
-    const applied: { characteristics: Record<string, any>; wounds: Record<string, any> } = {
+    const itemUpdates: Array<Record<string, any>> = [];
+    const applied: {
+      characteristics: Record<string, any>;
+      wounds: Record<string, any>;
+      skills: Record<string, any>;
+      career?: string;
+    } = {
       characteristics: {},
       wounds: {},
+      skills: {},
     };
     const warnings: string[] = [];
 
@@ -6047,12 +6056,55 @@ export class FoundryDataAccess {
       }
     }
 
-    if (Object.keys(update).length === 0) {
-      return { success: false, error: 'No valid fields to update.', ...(warnings.length ? { warnings } : {}) };
+    // Existing embedded-item edits: bump advances on skills the actor already
+    // has, and/or switch which career item is current. (Adding new skills or
+    // careers is wfrp4e-add-items' job.)
+    if (Array.isArray(data.skills)) {
+      for (const s of data.skills) {
+        const item = actor.items.find(
+          (i: any) => i.type === 'skill' && i.name?.toLowerCase() === s.name.toLowerCase()
+        );
+        if (!item) {
+          warnings.push(`Skill "${s.name}" not on ${actor.name} — use wfrp4e-add-items to add it.`);
+          continue;
+        }
+        itemUpdates.push({ _id: item.id, 'system.advances.value': s.advances });
+        applied.skills[item.name] = { advances: { from: item.system?.advances?.value, to: s.advances } };
+      }
+    }
+
+    if (data.career) {
+      const target = actor.items.find(
+        (i: any) => i.type === 'career' && i.name?.toLowerCase() === data.career!.toLowerCase()
+      );
+      if (!target) {
+        warnings.push(`Career "${data.career}" not on ${actor.name} — use wfrp4e-add-items to add it.`);
+      } else {
+        // Exactly one career is current; flip the target on and the rest off.
+        for (const it of actor.items) {
+          if (it.type === 'career') {
+            itemUpdates.push({ _id: it.id, 'system.current.value': it.id === target.id });
+          }
+        }
+        applied.career = target.name;
+      }
+    }
+
+    if (Object.keys(update).length === 0 && itemUpdates.length === 0) {
+      return {
+        success: false,
+        error: 'No valid fields to update.',
+        ...(warnings.length ? { warnings } : {}),
+      };
     }
 
     try {
-      await actor.update(update);
+      if (Object.keys(update).length > 0) {
+        await actor.update(update);
+      }
+      if (itemUpdates.length > 0) {
+        await actor.updateEmbeddedDocuments('Item', itemUpdates);
+      }
     } catch (error) {
       console.error(`[${MODULE_ID}] Error updating WFRP4e actor:`, error);
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
@@ -6074,6 +6126,246 @@ export class FoundryDataAccess {
       id: actor.id,
       applied,
       newCharacteristicTotals: newTotals,
+      ...(warnings.length ? { warnings } : {}),
+    };
+  }
+
+  /**
+   * Add items (skills, talents, traits, trappings, careers, weapons, spells, …)
+   * to an existing WFRP4e actor. Each requested item is matched by name against
+   * the installed WFRP4e compendiums and copied in full, so a skill keeps its
+   * linked characteristic, a talent its tests/max, a career its progression.
+   * Names with no compendium match are added as a blank item of the requested
+   * (or default) type so homebrew still works.
+   *
+   * Per-item extras: `advances` sets a skill's advances; `quantity` sets a
+   * gear count; `setCurrent` makes a career the active one (flipping the others
+   * off). Resolution prefers the Core Rulebook pack, then the rest; pass `type`
+   * and/or `pack` to disambiguate a name that exists in several places.
+   */
+  async addWfrp4eItems(data: {
+    actor: string;
+    items: Array<{
+      name: string;
+      type?: string;
+      pack?: string;
+      advances?: number;
+      quantity?: number;
+      setCurrent?: boolean;
+    }>;
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const systemId = (game.system as any).id;
+    if (systemId !== 'wfrp4e') {
+      return {
+        success: false,
+        error: `wfrp4e-add-items requires the WFRP4e system (current: "${systemId}")`,
+      };
+    }
+
+    if (!Array.isArray(data.items) || data.items.length === 0) {
+      return { success: false, error: 'items array is required and must contain at least one entry' };
+    }
+
+    const actor = this.findActorByIdentifier(data.actor);
+    if (!actor) {
+      return { success: false, error: `Actor not found: ${data.actor}` };
+    }
+
+    // Candidate Item packs, Core Rulebook first so a name shared across books
+    // resolves to the canonical entry.
+    const itemPacks: any[] = Array.from((game.packs as any) || []).filter(
+      (p: any) => (p.metadata?.type ?? p.documentName) === 'Item'
+    );
+    itemPacks.sort((a: any, b: any) => {
+      const rank = (p: any) => (String(p.metadata?.id || '').startsWith('wfrp4e-core') ? 0 : 1);
+      return rank(a) - rank(b);
+    });
+
+    // Per-call index cache — each pack's index is loaded at most once.
+    const indexCache = new Map<string, any>();
+    const getIndex = async (pack: any) => {
+      const id = pack.metadata.id;
+      if (!indexCache.has(id)) indexCache.set(id, await pack.getIndex());
+      return indexCache.get(id);
+    };
+
+    const warnings: string[] = [];
+    const notFound: string[] = [];
+    const ambiguous: Array<{ name: string; candidates: Array<{ pack: string; type: string }> }> = [];
+
+    // Aligned creation plan: toCreate[i] ↔ plan[i] (skipped items push to neither).
+    const toCreate: Array<Record<string, any>> = [];
+    const plan: Array<{
+      advances: number | undefined;
+      quantity: number | undefined;
+      setCurrent: boolean | undefined;
+      source: string;
+    }> = [];
+
+    for (const req of data.items) {
+      const nameLower = req.name.toLowerCase();
+      const typeWanted = req.type?.toLowerCase();
+      const searchPacks = req.pack
+        ? itemPacks.filter(
+            (p: any) => p.metadata.id === req.pack || p.metadata.id.includes(req.pack as string)
+          )
+        : itemPacks;
+
+      const matches: Array<{ packId: string; packLabel: string; entryId: string; type: string }> = [];
+      for (const pack of searchPacks) {
+        const index = await getIndex(pack);
+        for (const entry of index) {
+          if (
+            entry.name?.toLowerCase() === nameLower &&
+            (!typeWanted || entry.type === typeWanted)
+          ) {
+            matches.push({
+              packId: pack.metadata.id,
+              packLabel: pack.metadata.label,
+              entryId: entry._id,
+              type: entry.type,
+            });
+          }
+        }
+      }
+
+      if (matches.length === 0) {
+        const fallbackType = typeWanted || 'trapping';
+        toCreate.push({ name: req.name, type: fallbackType });
+        plan.push({
+          advances: req.advances,
+          quantity: req.quantity,
+          setCurrent: req.setCurrent,
+          source: 'custom (not in compendium)',
+        });
+        notFound.push(req.name);
+        warnings.push(
+          `"${req.name}" not found in any WFRP4e compendium — added as a blank ${fallbackType}.`
+        );
+        continue;
+      }
+
+      // Several distinct item types share this name and the caller didn't pick
+      // one — don't guess.
+      const distinctTypes = [...new Set(matches.map(m => m.type))];
+      if (!typeWanted && distinctTypes.length > 1) {
+        ambiguous.push({
+          name: req.name,
+          candidates: matches.map(m => ({ pack: m.packId, type: m.type })),
+        });
+        warnings.push(
+          `"${req.name}" matches multiple item types (${distinctTypes.join(', ')}); pass "type" to choose — skipped.`
+        );
+        continue;
+      }
+
+      // matches preserves the core-first pack order, so [0] is the best source.
+      const chosen = matches[0]!;
+      const pack = (game.packs as any).get(chosen.packId);
+      const sourceDoc = await pack.getDocument(chosen.entryId);
+      const obj = sourceDoc.toObject() as any;
+      toCreate.push({
+        name: obj.name,
+        type: obj.type,
+        img: obj.img,
+        system: obj.system,
+        effects: obj.effects || [],
+        flags: obj.flags || {},
+      });
+      plan.push({
+        advances: req.advances,
+        quantity: req.quantity,
+        setCurrent: req.setCurrent,
+        source: chosen.packLabel,
+      });
+    }
+
+    if (toCreate.length === 0) {
+      return {
+        success: false,
+        error: 'No items could be added.',
+        ...(notFound.length ? { notFound } : {}),
+        ...(ambiguous.length ? { ambiguous } : {}),
+        ...(warnings.length ? { warnings } : {}),
+      };
+    }
+
+    let created: any[] = [];
+    try {
+      created = (await actor.createEmbeddedDocuments('Item', toCreate)) || [];
+
+      // Post-create patches: skill advances, gear quantity, current career.
+      const postUpdates: Array<Record<string, any>> = [];
+      let currentCareerId: string | undefined;
+      created.forEach((doc: any, i: number) => {
+        const p = plan[i]!;
+        const patch: Record<string, any> = { _id: doc.id };
+        let dirty = false;
+        if (p.advances !== undefined && doc.type === 'skill') {
+          patch['system.advances.value'] = p.advances;
+          dirty = true;
+        }
+        if (p.quantity !== undefined && doc.system?.quantity !== undefined) {
+          patch['system.quantity.value'] = p.quantity;
+          dirty = true;
+        }
+        if (dirty) postUpdates.push(patch);
+        if (p.setCurrent && doc.type === 'career') currentCareerId = doc.id;
+      });
+
+      // Only one career is current; if asked, flip the chosen one on and every
+      // other career on the actor (new or pre-existing) off.
+      if (currentCareerId) {
+        for (const it of actor.items) {
+          if (it.type === 'career') {
+            postUpdates.push({ _id: it.id, 'system.current.value': it.id === currentCareerId });
+          }
+        }
+      }
+
+      if (postUpdates.length > 0) {
+        await actor.updateEmbeddedDocuments('Item', postUpdates);
+      }
+    } catch (error) {
+      console.error(`[${MODULE_ID}] Error adding WFRP4e items:`, error);
+      this.auditLog(
+        'addWfrp4eItems',
+        { actor: data.actor, count: toCreate.length },
+        'failure',
+        error instanceof Error ? error.message : 'Unknown error'
+      );
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+
+    // Summarise, reading back derived skill totals / career state as confirmation.
+    const createdSummary = created.map((doc: any, i: number) => {
+      const after = actor.items.get(doc.id);
+      const entry: Record<string, any> = {
+        id: doc.id,
+        name: doc.name,
+        type: doc.type,
+        source: plan[i]!.source,
+      };
+      if (after?.type === 'skill') {
+        entry.advances = after.system?.advances?.value;
+        entry.total = after.system?.total?.value;
+        entry.characteristic = after.system?.characteristic?.value;
+      }
+      if (after?.type === 'career') entry.current = after.system?.current?.value ?? false;
+      return entry;
+    });
+
+    this.auditLog('addWfrp4eItems', { actor: data.actor, count: created.length }, 'success');
+
+    return {
+      success: true,
+      actor: actor.name,
+      id: actor.id,
+      created: createdSummary,
+      ...(notFound.length ? { notFound } : {}),
+      ...(ambiguous.length ? { ambiguous } : {}),
       ...(warnings.length ? { warnings } : {}),
     };
   }

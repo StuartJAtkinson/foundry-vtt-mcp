@@ -32,6 +32,7 @@ import { CampaignManagementTools } from './tools/campaign-management.js';
 
 import { OwnershipTools } from './tools/ownership.js';
 import { WFRP4eUpdateActorTools } from './tools/wfrp4e/update-actor.js';
+import { WFRP4eAddItemsTools } from './tools/wfrp4e/add-items.js';
 
 import { MapGenerationTools } from './tools/map-generation.js';
 
@@ -1205,6 +1206,7 @@ async function startBackend(): Promise<void> {
   const tokenManipulationTools = new TokenManipulationTools({ foundryClient, logger });
 
   const wfrp4eUpdateActorTools = new WFRP4eUpdateActorTools({ foundryClient, logger });
+  const wfrp4eAddItemsTools = new WFRP4eAddItemsTools({ foundryClient, logger });
 
   // Initialize mapgen-style backend components for map generation
   let mapGenerationJobQueue: any = null;
@@ -1427,6 +1429,8 @@ async function startBackend(): Promise<void> {
 
     ...wfrp4eUpdateActorTools.getToolDefinitions(),
 
+    ...wfrp4eAddItemsTools.getToolDefinitions(),
+
     ...tokenManipulationTools.getToolDefinitions(),
 
     ...mapGenerationTools.getToolDefinitions(),
@@ -1575,6 +1579,11 @@ async function startBackend(): Promise<void> {
 
                 case 'wfrp4e-update-actor':
                   result = await wfrp4eUpdateActorTools.handleUpdateActor(args);
+
+                  break;
+
+                case 'wfrp4e-add-items':
+                  result = await wfrp4eAddItemsTools.handleAddItems(args);
 
                   break;
 
