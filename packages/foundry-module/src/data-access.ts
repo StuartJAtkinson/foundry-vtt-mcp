@@ -6195,14 +6195,34 @@ export class FoundryDataAccess {
     const notFound: string[] = [];
     const ambiguous: Array<{ name: string; candidates: Array<{ pack: string; type: string }> }> = [];
 
-    // Aligned creation plan: toCreate[i] ↔ plan[i] (skipped items push to neither).
+    // Skill advances and gear quantity are baked into each item's creation data
+    // (below) rather than patched afterwards, because createEmbeddedDocuments
+    // does not guarantee it returns documents in the order we send them — so
+    // positional alignment between the created docs and our requests is unsafe.
+    const GEAR_TYPES = new Set([
+      'weapon',
+      'armour',
+      'trapping',
+      'ammunition',
+      'container',
+      'money',
+      'cargo',
+    ]);
+    const applyExtras = (obj: Record<string, any>, type: string, req: any): void => {
+      obj.system = obj.system || {};
+      if (req.advances !== undefined && type === 'skill') {
+        obj.system.advances = { ...(obj.system.advances || {}), value: req.advances };
+      }
+      if (req.quantity !== undefined && GEAR_TYPES.has(type)) {
+        obj.system.quantity = { ...(obj.system.quantity || {}), value: req.quantity };
+      }
+    };
+
     const toCreate: Array<Record<string, any>> = [];
-    const plan: Array<{
-      advances: number | undefined;
-      quantity: number | undefined;
-      setCurrent: boolean | undefined;
-      source: string;
-    }> = [];
+    // Keyed by `${type}::${name}` (the created doc's own name/type) so we can
+    // match created documents back to their request without relying on order.
+    const plan: Array<{ nameLower: string; type: string; setCurrent: boolean | undefined; source: string }> =
+      [];
 
     for (const req of data.items) {
       const nameLower = req.name.toLowerCase();
@@ -6233,10 +6253,12 @@ export class FoundryDataAccess {
 
       if (matches.length === 0) {
         const fallbackType = typeWanted || 'trapping';
-        toCreate.push({ name: req.name, type: fallbackType });
+        const obj: Record<string, any> = { name: req.name, type: fallbackType, system: {} };
+        applyExtras(obj, fallbackType, req);
+        toCreate.push(obj);
         plan.push({
-          advances: req.advances,
-          quantity: req.quantity,
+          nameLower,
+          type: fallbackType,
           setCurrent: req.setCurrent,
           source: 'custom (not in compendium)',
         });
@@ -6266,17 +6288,19 @@ export class FoundryDataAccess {
       const pack = (game.packs as any).get(chosen.packId);
       const sourceDoc = await pack.getDocument(chosen.entryId);
       const obj = sourceDoc.toObject() as any;
-      toCreate.push({
+      const clean: Record<string, any> = {
         name: obj.name,
         type: obj.type,
         img: obj.img,
-        system: obj.system,
+        system: obj.system || {},
         effects: obj.effects || [],
         flags: obj.flags || {},
-      });
+      };
+      applyExtras(clean, obj.type, req);
+      toCreate.push(clean);
       plan.push({
-        advances: req.advances,
-        quantity: req.quantity,
+        nameLower: String(obj.name).toLowerCase(),
+        type: obj.type,
         setCurrent: req.setCurrent,
         source: chosen.packLabel,
       });
@@ -6296,37 +6320,30 @@ export class FoundryDataAccess {
     try {
       created = (await actor.createEmbeddedDocuments('Item', toCreate)) || [];
 
-      // Post-create patches: skill advances, gear quantity, current career.
-      const postUpdates: Array<Record<string, any>> = [];
-      let currentCareerId: string | undefined;
-      created.forEach((doc: any, i: number) => {
-        const p = plan[i]!;
-        const patch: Record<string, any> = { _id: doc.id };
-        let dirty = false;
-        if (p.advances !== undefined && doc.type === 'skill') {
-          patch['system.advances.value'] = p.advances;
-          dirty = true;
-        }
-        if (p.quantity !== undefined && doc.system?.quantity !== undefined) {
-          patch['system.quantity.value'] = p.quantity;
-          dirty = true;
-        }
-        if (dirty) postUpdates.push(patch);
-        if (p.setCurrent && doc.type === 'career') currentCareerId = doc.id;
-      });
-
-      // Only one career is current; if asked, flip the chosen one on and every
-      // other career on the actor (new or pre-existing) off.
-      if (currentCareerId) {
-        for (const it of actor.items) {
-          if (it.type === 'career') {
-            postUpdates.push({ _id: it.id, 'system.current.value': it.id === currentCareerId });
+      // Make a career current if requested. Match the created career by NAME,
+      // not by position (see the ordering note above). Exactly one career is
+      // current, so flip the target on and every other career off.
+      const setCurrentNames = new Set(
+        plan.filter(p => p.setCurrent && p.type === 'career').map(p => p.nameLower)
+      );
+      if (setCurrentNames.size > 0) {
+        let targetId: string | undefined;
+        for (const doc of created) {
+          if (doc.type === 'career' && setCurrentNames.has(String(doc.name).toLowerCase())) {
+            targetId = doc.id;
           }
         }
-      }
-
-      if (postUpdates.length > 0) {
-        await actor.updateEmbeddedDocuments('Item', postUpdates);
+        if (targetId) {
+          const careerUpdates: Array<Record<string, any>> = [];
+          for (const it of actor.items) {
+            if (it.type === 'career') {
+              careerUpdates.push({ _id: it.id, 'system.current.value': it.id === targetId });
+            }
+          }
+          if (careerUpdates.length > 0) {
+            await actor.updateEmbeddedDocuments('Item', careerUpdates);
+          }
+        }
       }
     } catch (error) {
       console.error(`[${MODULE_ID}] Error adding WFRP4e items:`, error);
@@ -6340,13 +6357,17 @@ export class FoundryDataAccess {
     }
 
     // Summarise, reading back derived skill totals / career state as confirmation.
-    const createdSummary = created.map((doc: any, i: number) => {
+    // Source is looked up by name+type (order-independent).
+    const sourceByKey = new Map<string, string>();
+    for (const p of plan) sourceByKey.set(`${p.type}::${p.nameLower}`, p.source);
+
+    const createdSummary = created.map((doc: any) => {
       const after = actor.items.get(doc.id);
       const entry: Record<string, any> = {
         id: doc.id,
         name: doc.name,
         type: doc.type,
-        source: plan[i]!.source,
+        source: sourceByKey.get(`${doc.type}::${String(doc.name).toLowerCase()}`) ?? 'unknown',
       };
       if (after?.type === 'skill') {
         entry.advances = after.system?.advances?.value;
