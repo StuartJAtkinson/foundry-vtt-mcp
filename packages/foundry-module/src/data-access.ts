@@ -6083,14 +6083,9 @@ export class FoundryDataAccess {
       };
     }
 
-    // Resolve actor by id (16-char) or name
-    let actor: any;
-    if (data.actor.length === 16) {
-      actor = game.actors?.get(data.actor);
-    }
-    if (!actor) {
-      actor = game.actors?.find((a: any) => a.name?.toLowerCase() === data.actor.toLowerCase());
-    }
+    // Resolve a world actor by id/name, or a scene token by id (an unlinked
+    // token resolves to its own synthetic actor — see findActorByIdentifier).
+    const actor = this.findActorByIdentifier(data.actor);
     if (!actor) {
       return { success: false, error: `Actor not found: ${data.actor}` };
     }
@@ -6601,13 +6596,23 @@ export class FoundryDataAccess {
    * Find actor by name or ID
    */
   private findActorByIdentifier(identifier: string): any {
-    return (
+    const worldActor =
       game.actors?.get(identifier) ||
       game.actors?.getName(identifier) ||
       Array.from(game.actors || []).find(a =>
         a.name?.toLowerCase().includes(identifier.toLowerCase())
-      )
-    );
+      );
+    if (worldActor) return worldActor;
+
+    // Fallback: a scene Token id. For an unlinked token this returns the token's
+    // own synthetic (delta-backed) actor, so edits persist to that token alone —
+    // the way to tweak one copy on a map without touching the prototype or its
+    // siblings. (For a linked token this is the world actor, same as above.)
+    for (const scene of (game.scenes as any) || []) {
+      const token = scene.tokens?.get(identifier);
+      if (token?.actor) return token.actor;
+    }
+    return undefined;
   }
 
   /**
