@@ -6209,6 +6209,12 @@ export class FoundryDataAccess {
       }
     } catch (error) {
       console.error(`[${MODULE_ID}] Error updating WFRP4e actor:`, error);
+      this.auditLog(
+        'updateWfrp4eActor',
+        { actor: data.actor },
+        'failure',
+        error instanceof Error ? error.message : 'Unknown error'
+      );
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
 
@@ -6221,6 +6227,8 @@ export class FoundryDataAccess {
         if (c) newTotals[key.toUpperCase()] = { total: c.value, bonus: c.bonus };
       }
     }
+
+    this.auditLog('updateWfrp4eActor', { actor: data.actor }, 'success');
 
     return {
       success: true,
