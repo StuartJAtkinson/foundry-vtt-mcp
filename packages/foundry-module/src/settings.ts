@@ -384,6 +384,22 @@ export class ModuleSettings {
       type: Object,
       default: {},
     });
+
+    // ============================================================================
+    // SECTION 5: DDB-BRIDGE PROXY (self-contained DDB character import)
+    // ============================================================================
+
+    game.settings.register(this.moduleId, 'ddb-bridge-url', {
+      name: 'D&D Beyond Bridge URL',
+      hint:
+        'URL of the ddb-bridge proxy used for self-contained DDB character import. ' +
+        'Default: http://localhost:31417. The proxy holds the Cobalt cookie — ' +
+        'no Foundry-side cobalt paste needed.',
+      scope: 'world',
+      config: true,
+      type: String,
+      default: 'http://localhost:31417',
+    });
   }
 
   /**

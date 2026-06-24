@@ -9300,6 +9300,143 @@ export class FoundryDataAccess {
       throw error;
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Self-contained DDB character import.
+  //
+  // Bypasses ddb-importer entirely. Fetches the DDB character sheet from the
+  // ddb-bridge proxy (where the Cobalt cookie lives in .env), maps it to a
+  // Foundry actor via ddb-mapper, then constructs the actor + embeds items
+  // using native dnd5e APIs. The only user-facing setting is `ddb-bridge-url`.
+  // ---------------------------------------------------------------------------
+
+  async importDDBCharacter(data: {
+    characterId: number | string;
+    proxyUrl?: string;
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    if ((game.system as any).id !== 'dnd5e') {
+      throw new Error('importDDBCharacter requires the dnd5e game system');
+    }
+
+    const { mapDdbToActor, resolvePackSource } = await import('./ddb-mapper.js');
+
+    const proxyUrl = (data.proxyUrl || '').replace(/\/+$/, '') || 'http://localhost:31417';
+    const characterId = Number(data.characterId);
+    if (!Number.isFinite(characterId) || characterId <= 0) {
+      throw new Error(`Invalid characterId: ${data.characterId}`);
+    }
+
+    // 1. Fetch character sheet from ddb-bridge proxy.
+    const proxyRes = await fetch(`${proxyUrl}/proxy/character`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // ponytail: cobalt omitted on purpose — proxy falls back to its own .env cobalt.
+      body: JSON.stringify({ characterId, cobalt: '', updateId: 0 }),
+    });
+    if (!proxyRes.ok) {
+      throw new Error(`ddb-bridge HTTP ${proxyRes.status}: ${await proxyRes.text()}`);
+    }
+    const proxyPayload = await proxyRes.json();
+    if (!proxyPayload?.success) {
+      throw new Error(`ddb-bridge error: ${proxyPayload?.message || 'unknown'}`);
+    }
+
+    // 2. Resolve compendium packs (dnd5e SRD).
+    const packs = {
+      items: game.packs.get('dnd5e.items'),
+      spells: game.packs.get('dnd5e.spells'),
+      classfeatures: game.packs.get('dnd5e.classfeatures'),
+      feats: game.packs.get('dnd5e.feats'),
+      races: game.packs.get('dnd5e.races'),
+      backgrounds: game.packs.get('dnd5e.backgrounds'),
+      classes: game.packs.get('dnd5e.classes'),
+    };
+
+    // 3. Map DDB → Foundry payload (pure).
+    const helpers = {
+      getInitialSystem: () =>
+        (game as any).dnd5e.dataModels.actor.CharacterData.schema.getInitialValue(),
+      getItemSystem: (type: string) => {
+        const map: Record<string, string> = {
+          weapon: 'WeaponData',
+          equipment: 'EquipmentData',
+          consumable: 'ConsumableData',
+          tool: 'ToolData',
+          loot: 'LootData',
+          feat: 'FeatData',
+          spell: 'SpellData',
+          class: 'ClassData',
+          race: 'RaceData',
+          background: 'BackgroundData',
+          subclass: 'SubclassData',
+        };
+        const modelName = map[type] || 'BaseItemData';
+        return (game as any).dnd5e.dataModels.item[modelName].schema.getInitialValue();
+      },
+      imgFor: (_pack: string, _name: string) => 'icons/svg/item-bag.svg',
+    };
+
+    const payload = mapDdbToActor(proxyPayload.ddb, packs, helpers);
+
+    // 4. Resolve _packSource items to full document data; drop items we can't resolve.
+    const resolvedItems: any[] = [];
+    for (const item of payload.items) {
+      if (item._packSource) {
+        const packId = item._packSource.split('.')[1]; // "items", "spells", "classfeatures"
+        const pack = packs[packId as keyof typeof packs];
+        if (pack) {
+          try {
+            const doc = await resolvePackSource(pack, item._packSource);
+            if (doc) {
+              resolvedItems.push(doc);
+              continue;
+            }
+          } catch (_) {
+            // fall through to stub
+          }
+        }
+      }
+      resolvedItems.push({
+        name: item.name,
+        type: item.type,
+        img: item.img,
+        system: item.system,
+      });
+    }
+
+    // 5. Create the actor. Use minimal payload (system + name + type + img).
+    // Items are attached separately via createEmbeddedDocuments so we can pass
+    // them with keepId: true for compendium sources.
+    const actor = await Actor.create({
+      name: payload.name,
+      type: payload.type,
+      img: payload.img,
+      system: payload.system,
+    });
+    if (!actor) {
+      throw new Error('Actor.create returned null');
+    }
+
+    // 6. Embed items in batches (Foundry chokes on very large arrays).
+    const BATCH = 25;
+    for (let i = 0; i < resolvedItems.length; i += BATCH) {
+      const batch = resolvedItems.slice(i, i + BATCH);
+      await actor.createEmbeddedDocuments('Item', batch, { keepId: true });
+    }
+
+    this.auditLog('importDDBCharacter', { characterId, proxyUrl }, 'success');
+
+    return {
+      success: true,
+      actorId: actor.id,
+      actorName: actor.name,
+      itemCount: resolvedItems.length,
+      proxy: proxyUrl,
+      message: `✅ Imported "${actor.name}" (${resolvedItems.length} items) via ${proxyUrl}`,
+    };
+  }
 }
 
 // =============================================================================

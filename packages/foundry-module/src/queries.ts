@@ -149,6 +149,10 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.addSpellsToActor`] = this.handleAddSpellsToActor.bind(this);
     CONFIG.queries[`${modulePrefix}.addFeaturesFromCompendium`] =
       this.handleAddFeaturesFromCompendium.bind(this);
+
+    // Phase 3 (unblock): self-contained DDB character import.
+    // Fetches from ddb-bridge proxy and builds the actor natively — no ddb-importer.
+    CONFIG.queries[`${modulePrefix}.importDDBCharacter`] = this.handleImportDDBCharacter.bind(this);
   }
 
   /**
@@ -1977,6 +1981,38 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to add features from compendium: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Handle self-contained DDB character import — drops ddb-importer dependency.
+   * Fetches character data from the ddb-bridge proxy configured in module settings
+   * and constructs the Foundry actor using native dnd5e APIs.
+   */
+  private async handleImportDDBCharacter(data: { characterId: number | string }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!data?.characterId) {
+        throw new Error('characterId is required');
+      }
+
+      const proxyUrl =
+        (game.settings.get(MODULE_ID, 'ddb-bridge-url') as string) || 'http://localhost:31417';
+
+      return await this.dataAccess.importDDBCharacter({
+        characterId: data.characterId,
+        proxyUrl,
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to import DDB character: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
