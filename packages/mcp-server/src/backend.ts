@@ -1580,6 +1580,11 @@ async function startBackend(): Promise<void> {
 
                   break;
 
+                case 'import-scene-with-walls':
+                  result = await sceneTools.handleImportSceneWithWalls(args);
+
+                  break;
+
                 // Actor creation tools
 
                 case 'create-actor-from-compendium':

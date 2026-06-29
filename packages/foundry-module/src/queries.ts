@@ -153,6 +153,10 @@ export class QueryHandlers {
     // Phase 3 (unblock): self-contained DDB character import.
     // Fetches from ddb-bridge proxy and builds the actor natively — no ddb-importer.
     CONFIG.queries[`${modulePrefix}.importDDBCharacter`] = this.handleImportDDBCharacter.bind(this);
+
+    // Build a scene + walls/doors/lights from Universal VTT geometry.
+    CONFIG.queries[`${modulePrefix}.importSceneWithWalls`] =
+      this.handleImportSceneWithWalls.bind(this);
   }
 
   /**
@@ -2013,6 +2017,35 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to import DDB character: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Create/extend a scene from Universal VTT geometry (walls, doors, lights).
+   */
+  private async handleImportSceneWithWalls(data: {
+    scene_name?: string;
+    uvtt: any;
+    image_path?: string;
+    target_scene_id?: string;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!data?.uvtt) {
+        throw new Error('uvtt data is required');
+      }
+
+      return await this.dataAccess.importSceneWithWalls(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to import scene with walls: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

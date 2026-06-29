@@ -49,7 +49,76 @@ export class SceneTools {
           properties: {},
         },
       },
+      {
+        name: 'import-scene-with-walls',
+        description:
+          'Build line-of-sight for a map from Universal VTT (UVTT/dd2vtt/df2vtt) geometry: creates walls, doors and lights. Either creates a new scene (pass scene_name, and optionally image_path to an already-uploaded background) or adds the geometry to an existing scene (pass target_scene_id). The uvtt object is the parsed JSON from a .uvtt file or an auto-wall export (resolution + line_of_sight + portals + lights). Does NOT upload base64 images — use scene-express for that, then target the resulting scene by id.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            uvtt: {
+              type: 'object',
+              description:
+                'Parsed Universal VTT JSON: { resolution:{map_size,map_origin,pixels_per_grid}, line_of_sight:[[{x,y}...]], objects_line_of_sight, portals:[{bounds:[{x,y},{x,y}],closed}], lights:[{position,range,color}] }. Coordinates in grid units.',
+            },
+            scene_name: {
+              type: 'string',
+              description: 'Name for a NEW scene. Required unless target_scene_id is given.',
+            },
+            image_path: {
+              type: 'string',
+              description:
+                'Optional background image path/URL already servable by Foundry (relative to the data dir, or an absolute URL). Only used when creating a new scene.',
+            },
+            target_scene_id: {
+              type: 'string',
+              description:
+                'Add walls/lights to this existing scene (id or exact name) instead of creating one.',
+            },
+          },
+          required: ['uvtt'],
+        },
+      },
     ];
+  }
+
+  async handleImportSceneWithWalls(args: any): Promise<any> {
+    const schema = z
+      .object({
+        uvtt: z.record(z.any()),
+        scene_name: z.string().optional(),
+        image_path: z.string().optional(),
+        target_scene_id: z.string().optional(),
+      })
+      .refine(a => !!a.scene_name || !!a.target_scene_id, {
+        message: 'Provide scene_name (new scene) or target_scene_id (existing scene)',
+      });
+    const parsed = schema.parse(args);
+
+    this.logger.info('Importing scene with walls', {
+      scene_name: parsed.scene_name,
+      target_scene_id: parsed.target_scene_id,
+    });
+
+    try {
+      const result = await this.foundryClient.query(
+        'foundry-mcp-bridge.importSceneWithWalls',
+        parsed
+      );
+      if (result?.success) {
+        return { ...result, message: result.message };
+      }
+      return {
+        success: false,
+        error: result?.error || 'scene import returned no result',
+        message: `❌ Scene import failed: ${result?.error || 'unknown error'}`,
+      };
+    } catch (error) {
+      this.logger.error('Failed to import scene with walls', error);
+      throw new Error(
+        `Failed to import scene with walls: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   }
 
   async handleGetCurrentScene(args: any): Promise<any> {

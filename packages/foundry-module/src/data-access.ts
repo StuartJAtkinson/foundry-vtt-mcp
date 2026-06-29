@@ -1,6 +1,7 @@
 import { MODULE_ID, ERROR_MESSAGES, TOKEN_DISPOSITIONS } from './constants.js';
 import { permissionManager } from './permissions.js';
 import { transactionManager } from './transaction-manager.js';
+import { uvttToSceneDocs } from './uvtt-to-scene.js';
 // Local type definitions to avoid shared package import issues
 interface CharacterInfo {
   id: string;
@@ -6946,6 +6947,82 @@ export class FoundryDataAccess {
         `Failed to switch scene: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  /**
+   * Create a Foundry scene (or add to an existing one) from Universal VTT
+   * geometry: walls, doors and lights. The image/background is optional and,
+   * when given, must already be a path/URL Foundry can serve (UVTT base64
+   * upload is out of scope — use scene-express for that, then target the scene).
+   */
+  async importSceneWithWalls(data: {
+    scene_name?: string;
+    uvtt: any;
+    image_path?: string;
+    target_scene_id?: string;
+  }): Promise<any> {
+    this.validateFoundryState();
+    if (!data?.uvtt) {
+      throw new Error('uvtt data is required');
+    }
+
+    const gridDistance = 5;
+    const docs = uvttToSceneDocs(data.uvtt, { gridDistance });
+
+    const scenes = (game as any).scenes;
+    let scene: any;
+    let created = false;
+
+    if (data.target_scene_id) {
+      scene =
+        scenes?.get(data.target_scene_id) ||
+        scenes?.contents?.find(
+          (s: any) => s.name?.toLowerCase() === String(data.target_scene_id).toLowerCase()
+        );
+      if (!scene) {
+        throw new Error(`Target scene not found: "${data.target_scene_id}"`);
+      }
+    } else {
+      if (!data.scene_name) {
+        throw new Error('scene_name is required when not targeting an existing scene');
+      }
+      const createData: any = {
+        name: data.scene_name,
+        padding: 0,
+        grid: { type: 1, size: docs.gridSize, distance: gridDistance, units: 'ft' },
+      };
+      if (docs.width) createData.width = docs.width;
+      if (docs.height) createData.height = docs.height;
+      if (data.image_path) createData.background = { src: data.image_path };
+      scene = await (globalThis as any).Scene.create(createData);
+      if (!scene) {
+        throw new Error('Scene.create returned nothing');
+      }
+      created = true;
+    }
+
+    const wallResult = docs.walls.length
+      ? await scene.createEmbeddedDocuments('Wall', docs.walls)
+      : [];
+    const lightResult = docs.lights.length
+      ? await scene.createEmbeddedDocuments('AmbientLight', docs.lights)
+      : [];
+
+    this.auditLog(
+      'importSceneWithWalls',
+      { sceneId: scene.id, walls: wallResult.length, lights: lightResult.length, created },
+      'success'
+    );
+
+    return {
+      success: true,
+      sceneId: scene.id,
+      sceneName: scene.name,
+      walls: wallResult.length,
+      lights: lightResult.length,
+      created,
+      message: `✅ ${created ? 'Created' : 'Updated'} scene "${scene.name}" — ${wallResult.length} walls, ${lightResult.length} lights`,
+    };
   }
 
   // ===== PHASE 7: CHARACTER ENTITY AND TOKEN MANIPULATION METHODS =====
