@@ -23,6 +23,7 @@ import { CompendiumTools } from './tools/compendium.js';
 import { SceneTools } from './tools/scene.js';
 
 import { ActorCreationTools } from './tools/actor-creation.js';
+import { DDBImporterTools } from './tools/ddb-importer.js';
 
 import { QuestCreationTools } from './tools/quest-creation.js';
 
@@ -1189,6 +1190,7 @@ async function startBackend(): Promise<void> {
   const sceneTools = new SceneTools({ foundryClient, logger });
 
   const actorCreationTools = new ActorCreationTools({ foundryClient, logger });
+  const ddbImporterTools = new DDBImporterTools({ foundryClient, logger });
 
   const dsa5CharacterCreator = new DSA5CharacterCreator({ foundryClient, logger });
 
@@ -1417,6 +1419,8 @@ async function startBackend(): Promise<void> {
 
     ...actorCreationTools.getToolDefinitions(),
 
+    ...ddbImporterTools.getToolDefinitions(),
+
     ...dsa5CharacterCreator.getToolDefinitions(),
 
     ...dnd5eAddFeatureTool.getToolDefinitions(),
@@ -1466,6 +1470,13 @@ async function startBackend(): Promise<void> {
 
   const server = net.createServer(socket => {
     socket.setEncoding('utf8');
+
+    // ponytail: a control-channel client that disconnects abruptly (RST) emits
+    // 'error' on the socket; with no handler Node throws and crashes the whole
+    // backend. Swallow per-socket errors so one bad client can't take it down.
+    socket.on('error', (err: any) => {
+      console.error('control socket error (ignored):', err?.code || err?.message);
+    });
 
     let buffer = '';
 
@@ -1578,6 +1589,11 @@ async function startBackend(): Promise<void> {
 
                 case 'get-compendium-entry-full':
                   result = await actorCreationTools.handleGetCompendiumEntryFull(args);
+
+                  break;
+
+                case 'import-ddb-character':
+                  result = await ddbImporterTools.handleImportDDBCharacter(args);
 
                   break;
 

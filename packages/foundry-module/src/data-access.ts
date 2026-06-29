@@ -9320,121 +9320,56 @@ export class FoundryDataAccess {
       throw new Error('importDDBCharacter requires the dnd5e game system');
     }
 
-    const { mapDdbToActor, resolvePackSource } = await import('./ddb-mapper.js');
+    // Delegate to ddb-importer's real importer. It performs the full "Import"
+    // (items, spells, currency, bio, descriptions, downloaded images) AND stamps
+    // the D&D Beyond sheet URL onto the actor (flags.ddbimporter.dndbeyond.url).
+    // The previous hand-rolled mapper produced only a partial actor (no images,
+    // no currency, no URL) — ddb-importer is the upstream that already solves it,
+    // routing through this bridge's proxy (configured as ddb-importer's endpoint).
+    // ponytail: thin wrapper over ddb-importer's public api, no remapping.
+    // Re-introduce a manual mapper only if ddb-importer is ever unavailable.
+    const ddbModule = (game as any).modules.get('ddb-importer');
+    if (!ddbModule?.active) {
+      throw new Error('ddb-importer module is not installed/active in this world');
+    }
+    const api = ddbModule.api;
+    if (typeof api?.importCharacterById !== 'function') {
+      throw new Error('ddb-importer api.importCharacterById is unavailable (update ddb-importer)');
+    }
 
-    const proxyUrl = (data.proxyUrl || '').replace(/\/+$/, '') || 'http://localhost:31417';
     const characterId = Number(data.characterId);
     if (!Number.isFinite(characterId) || characterId <= 0) {
       throw new Error(`Invalid characterId: ${data.characterId}`);
     }
 
-    // 1. Fetch character sheet from ddb-bridge proxy.
-    const proxyRes = await fetch(`${proxyUrl}/proxy/character`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // ponytail: cobalt omitted on purpose — proxy falls back to its own .env cobalt.
-      body: JSON.stringify({ characterId, cobalt: '', updateId: 0 }),
-    });
-    if (!proxyRes.ok) {
-      throw new Error(`ddb-bridge HTTP ${proxyRes.status}: ${await proxyRes.text()}`);
-    }
-    const proxyPayload = await proxyRes.json();
-    if (!proxyPayload?.success) {
-      throw new Error(`ddb-bridge error: ${proxyPayload?.message || 'unknown'}`);
-    }
+    // importCharacterById creates the actor (with the dndbeyond URL flag) and runs
+    // the full import. It may resolve to the actor or to an import result, so we
+    // also look the actor up by the ddbimporter characterId flag as a fallback.
+    const result = await api.importCharacterById(String(characterId));
+    const actor =
+      (result && (result as any).id ? result : null) ||
+      (game as any).actors.find(
+        (a: any) => Number(a.getFlag?.('ddbimporter', 'dndbeyond')?.characterId) === characterId
+      );
 
-    // 2. Resolve compendium packs (dnd5e SRD).
-    const packs = {
-      items: game.packs.get('dnd5e.items'),
-      spells: game.packs.get('dnd5e.spells'),
-      classfeatures: game.packs.get('dnd5e.classfeatures'),
-      feats: game.packs.get('dnd5e.feats'),
-      races: game.packs.get('dnd5e.races'),
-      backgrounds: game.packs.get('dnd5e.backgrounds'),
-      classes: game.packs.get('dnd5e.classes'),
-    };
-
-    // 3. Map DDB → Foundry payload (pure).
-    const helpers = {
-      getInitialSystem: () =>
-        (game as any).dnd5e.dataModels.actor.CharacterData.schema.getInitialValue(),
-      getItemSystem: (type: string) => {
-        const map: Record<string, string> = {
-          weapon: 'WeaponData',
-          equipment: 'EquipmentData',
-          consumable: 'ConsumableData',
-          tool: 'ToolData',
-          loot: 'LootData',
-          feat: 'FeatData',
-          spell: 'SpellData',
-          class: 'ClassData',
-          race: 'RaceData',
-          background: 'BackgroundData',
-          subclass: 'SubclassData',
-        };
-        const modelName = map[type] || 'BaseItemData';
-        return (game as any).dnd5e.dataModels.item[modelName].schema.getInitialValue();
-      },
-      imgFor: (_pack: string, _name: string) => 'icons/svg/item-bag.svg',
-    };
-
-    const payload = mapDdbToActor(proxyPayload.ddb, packs, helpers);
-
-    // 4. Resolve _packSource items to full document data; drop items we can't resolve.
-    const resolvedItems: any[] = [];
-    for (const item of payload.items) {
-      if (item._packSource) {
-        const packId = item._packSource.split('.')[1]; // "items", "spells", "classfeatures"
-        const pack = packs[packId as keyof typeof packs];
-        if (pack) {
-          try {
-            const doc = await resolvePackSource(pack, item._packSource);
-            if (doc) {
-              resolvedItems.push(doc);
-              continue;
-            }
-          } catch (_) {
-            // fall through to stub
-          }
-        }
-      }
-      resolvedItems.push({
-        name: item.name,
-        type: item.type,
-        img: item.img,
-        system: item.system,
-      });
-    }
-
-    // 5. Create the actor. Use minimal payload (system + name + type + img).
-    // Items are attached separately via createEmbeddedDocuments so we can pass
-    // them with keepId: true for compendium sources.
-    const actor = await Actor.create({
-      name: payload.name,
-      type: payload.type,
-      img: payload.img,
-      system: payload.system,
-    });
     if (!actor) {
-      throw new Error('Actor.create returned null');
+      throw new Error('ddb-importer ran but no actor was found for that characterId');
     }
 
-    // 6. Embed items in batches (Foundry chokes on very large arrays).
-    const BATCH = 25;
-    for (let i = 0; i < resolvedItems.length; i += BATCH) {
-      const batch = resolvedItems.slice(i, i + BATCH);
-      await actor.createEmbeddedDocuments('Item', batch, { keepId: true });
-    }
+    const url =
+      actor.getFlag?.('ddbimporter', 'dndbeyond')?.url ||
+      `https://www.dndbeyond.com/characters/${characterId}`;
+    const itemCount = actor.items?.size ?? 0;
 
-    this.auditLog('importDDBCharacter', { characterId, proxyUrl }, 'success');
+    this.auditLog('importDDBCharacter', { characterId, url }, 'success');
 
     return {
       success: true,
       actorId: actor.id,
       actorName: actor.name,
-      itemCount: resolvedItems.length,
-      proxy: proxyUrl,
-      message: `✅ Imported "${actor.name}" (${resolvedItems.length} items) via ${proxyUrl}`,
+      itemCount,
+      url,
+      message: `✅ Imported "${actor.name}" via ddb-importer (${itemCount} items) — ${url}`,
     };
   }
 }
