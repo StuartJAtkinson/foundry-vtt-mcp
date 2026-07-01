@@ -79,7 +79,87 @@ export class SceneTools {
           required: ['uvtt'],
         },
       },
+      {
+        name: 'list-map-scenes',
+        description:
+          'Browse pre-walled maps: lists scenes available in Scene-type compendium packs (e.g. Levels sample maps, Baileywiki maps if the module is enabled). Returns {packId, entryId, name} for each — pass those to import-compendium-scene to pull one into the world with its walls/lights already baked in. Optional filter matches scene names (case-insensitive).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filter: {
+              type: 'string',
+              description: 'Optional case-insensitive substring to match scene names.',
+            },
+          },
+        },
+      },
+      {
+        name: 'import-compendium-scene',
+        description:
+          'Pull a pre-walled map into the world: instantiates a Scene from a compendium pack (packId + entryId from list-map-scenes). Embedded walls, doors, lights and tokens come along automatically — no wall-building needed. Optionally rename via name.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            packId: {
+              type: 'string',
+              description: 'Compendium pack id (e.g. "levels.maps"), from list-map-scenes.',
+            },
+            entryId: {
+              type: 'string',
+              description: 'Scene entry id within the pack, from list-map-scenes.',
+            },
+            name: {
+              type: 'string',
+              description: 'Optional new name for the imported scene.',
+            },
+          },
+          required: ['packId', 'entryId'],
+        },
+      },
     ];
+  }
+
+  async handleListMapScenes(args: any): Promise<any> {
+    const schema = z.object({ filter: z.string().optional() });
+    const parsed = schema.parse(args);
+    this.logger.info('Listing compendium scenes', { filter: parsed.filter });
+    try {
+      return await this.foundryClient.query('foundry-mcp-bridge.listCompendiumScenes', parsed);
+    } catch (error) {
+      this.logger.error('Failed to list compendium scenes', error);
+      throw new Error(
+        `Failed to list map scenes: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  async handleImportCompendiumScene(args: any): Promise<any> {
+    const schema = z.object({
+      packId: z.string(),
+      entryId: z.string(),
+      name: z.string().optional(),
+    });
+    const parsed = schema.parse(args);
+    this.logger.info('Importing compendium scene', parsed);
+    try {
+      const result = await this.foundryClient.query(
+        'foundry-mcp-bridge.importCompendiumScene',
+        parsed
+      );
+      if (result?.success) {
+        return { ...result, message: result.message };
+      }
+      return {
+        success: false,
+        error: result?.error || 'compendium scene import returned no result',
+        message: `❌ Import failed: ${result?.error || 'unknown error'}`,
+      };
+    } catch (error) {
+      this.logger.error('Failed to import compendium scene', error);
+      throw new Error(
+        `Failed to import compendium scene: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   }
 
   async handleImportSceneWithWalls(args: any): Promise<any> {

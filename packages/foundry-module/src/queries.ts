@@ -157,6 +157,12 @@ export class QueryHandlers {
     // Build a scene + walls/doors/lights from Universal VTT geometry.
     CONFIG.queries[`${modulePrefix}.importSceneWithWalls`] =
       this.handleImportSceneWithWalls.bind(this);
+
+    // Browse + pull pre-walled maps from Scene compendium packs.
+    CONFIG.queries[`${modulePrefix}.listCompendiumScenes`] =
+      this.handleListCompendiumScenes.bind(this);
+    CONFIG.queries[`${modulePrefix}.importCompendiumScene`] =
+      this.handleImportCompendiumScene.bind(this);
   }
 
   /**
@@ -2046,6 +2052,49 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to import scene with walls: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * List scenes in Scene-type compendium packs (pre-walled maps to pull).
+   */
+  private async handleListCompendiumScenes(data: { filter?: string }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.listCompendiumScenes(data?.filter);
+    } catch (error) {
+      throw new Error(
+        `Failed to list compendium scenes: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Import a Scene (with embedded walls/lights/tokens) from a compendium.
+   */
+  private async handleImportCompendiumScene(data: {
+    packId: string;
+    entryId: string;
+    name?: string;
+  }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      if (!data?.packId || !data?.entryId) {
+        throw new Error('packId and entryId are required');
+      }
+      return await this.dataAccess.importCompendiumScene(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to import compendium scene: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

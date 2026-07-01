@@ -1585,6 +1585,16 @@ async function startBackend(): Promise<void> {
 
                   break;
 
+                case 'list-map-scenes':
+                  result = await sceneTools.handleListMapScenes(args);
+
+                  break;
+
+                case 'import-compendium-scene':
+                  result = await sceneTools.handleImportCompendiumScene(args);
+
+                  break;
+
                 // Actor creation tools
 
                 case 'create-actor-from-compendium':

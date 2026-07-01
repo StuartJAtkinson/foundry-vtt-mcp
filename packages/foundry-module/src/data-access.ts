@@ -7025,6 +7025,73 @@ export class FoundryDataAccess {
     };
   }
 
+  /**
+   * List scenes available in Scene-type compendium packs (pre-walled maps).
+   * ponytail: reads pack.index only (name/id) — no wall counts, since counting
+   * would load every scene doc. Import one to get its walls/lights.
+   */
+  async listCompendiumScenes(filter?: string): Promise<any> {
+    this.validateFoundryState();
+    const packs = (game as any).packs?.filter((p: any) => p.documentName === 'Scene') || [];
+    const needle = filter?.trim().toLowerCase();
+    const scenes: any[] = [];
+    for (const pack of packs) {
+      const index = await pack.getIndex();
+      for (const entry of index) {
+        if (needle && !entry.name?.toLowerCase().includes(needle)) continue;
+        scenes.push({
+          packId: pack.collection,
+          packLabel: pack.title,
+          entryId: entry._id,
+          name: entry.name,
+        });
+      }
+    }
+    return { total: scenes.length, packs: packs.length, scenes };
+  }
+
+  /**
+   * Instantiate a Scene from a compendium into the world. Embedded walls,
+   * lights and tokens come along automatically (importFromCompendium handles
+   * the full document tree), so a pre-walled map arrives pre-walled.
+   */
+  async importCompendiumScene(data: {
+    packId: string;
+    entryId: string;
+    name?: string;
+  }): Promise<any> {
+    this.validateFoundryState();
+    if (!data?.packId || !data?.entryId) {
+      throw new Error('packId and entryId are required');
+    }
+    const pack = (game as any).packs?.get(data.packId);
+    if (!pack) throw new Error(`Compendium pack "${data.packId}" not found`);
+    if (pack.documentName !== 'Scene') {
+      throw new Error(
+        `Pack "${data.packId}" is not a Scene pack (documentName: ${pack.documentName})`
+      );
+    }
+    const scenes = (game as any).scenes;
+    const updateData = data.name ? { name: data.name } : {};
+    const scene = await scenes.importFromCompendium(pack, data.entryId, updateData);
+    if (!scene) throw new Error(`Failed to import "${data.entryId}" from "${data.packId}"`);
+
+    this.auditLog(
+      'importCompendiumScene',
+      { packId: data.packId, entryId: data.entryId, sceneId: scene.id },
+      'success'
+    );
+    return {
+      success: true,
+      sceneId: scene.id,
+      sceneName: scene.name,
+      walls: scene.walls?.size ?? 0,
+      lights: scene.lights?.size ?? 0,
+      tokens: scene.tokens?.size ?? 0,
+      message: `✅ Imported scene "${scene.name}" — ${scene.walls?.size ?? 0} walls, ${scene.lights?.size ?? 0} lights`,
+    };
+  }
+
   // ===== PHASE 7: CHARACTER ENTITY AND TOKEN MANIPULATION METHODS =====
 
   /**
