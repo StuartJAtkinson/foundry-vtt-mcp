@@ -28,6 +28,7 @@ import { DDBImporterTools } from './tools/ddb-importer.js';
 import { QuestCreationTools } from './tools/quest-creation.js';
 
 import { DiceRollTools } from './tools/dice-roll.js';
+import { ChatLogTools } from './tools/chat-log.js';
 
 import { CampaignManagementTools } from './tools/campaign-management.js';
 
@@ -1204,6 +1205,7 @@ async function startBackend(): Promise<void> {
   const questCreationTools = new QuestCreationTools({ foundryClient, logger });
 
   const diceRollTools = new DiceRollTools({ foundryClient, logger });
+  const chatLogTools = new ChatLogTools({ foundryClient, logger });
 
   const campaignManagementTools = new CampaignManagementTools(foundryClient, logger);
 
@@ -1430,6 +1432,7 @@ async function startBackend(): Promise<void> {
     ...questCreationTools.getToolDefinitions(),
 
     ...diceRollTools.getToolDefinitions(),
+    ...chatLogTools.getToolDefinitions(),
 
     ...campaignManagementTools.getToolDefinitions(),
 
@@ -1612,6 +1615,11 @@ async function startBackend(): Promise<void> {
 
                   break;
 
+                case 'munch-ddb':
+                  result = await ddbImporterTools.handleMunchDDB(args);
+
+                  break;
+
                 case 'wfrp4e-update-actor':
                   result = await wfrp4eUpdateActorTools.handleUpdateActor(args);
 
@@ -1683,6 +1691,13 @@ async function startBackend(): Promise<void> {
 
                 case 'request-player-rolls':
                   result = await diceRollTools.handleRequestPlayerRolls(args);
+
+                  break;
+
+                // Chat log tools
+
+                case 'read-chat-log':
+                  result = await chatLogTools.handleReadChatLog(args);
 
                   break;
 

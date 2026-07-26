@@ -39,7 +39,52 @@ export class DDBImporterTools {
           required: ['characterId'],
         },
       },
+      {
+        name: 'munch-ddb',
+        description:
+          "Run ddb-importer's Muncher to bulk-import compendium content from D&D Beyond (this presses ddb-importer's own Muncher buttons via its api — content lands in ddb-importer's configured compendiums with its Iconizer icons and downloaded images intact). type is one of: monsters, spells, items, vehicles. monsters/spells/vehicles munch according to ddb-importer's own Muncher settings (source filters, update-existing, etc. — set those in the Muncher UI). items can optionally be scoped to specific D&D Beyond item ids. Requires ddb-importer installed/active with a valid CobaltSession in its settings. NOTE: a full monsters/items munch is long-running (minutes) and hits D&D Beyond hard; progress shows in ddb-importer's own UI.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['monsters', 'spells', 'items', 'vehicles'],
+              description: 'Which content type to munch.',
+            },
+            ids: {
+              type: 'array',
+              items: { type: 'number' },
+              description: 'Optional D&D Beyond ids to scope the munch (items only).',
+            },
+          },
+          required: ['type'],
+        },
+      },
     ];
+  }
+
+  async handleMunchDDB(args: any): Promise<any> {
+    const schema = z.object({
+      type: z.enum(['monsters', 'spells', 'items', 'vehicles']),
+      ids: z.array(z.number()).optional(),
+    });
+    const parsed = schema.parse(args);
+
+    this.logger.info('Munching DDB content', parsed);
+
+    try {
+      const result = await this.foundryClient.query('foundry-mcp-bridge.munchDDB', parsed);
+      if (result?.success) {
+        return { ...result, message: result.message };
+      }
+      return {
+        success: false,
+        error: result?.error || 'ddb-importer Muncher did not return a result',
+        message: `❌ Munch failed: ${result?.error || 'unknown error'}`,
+      };
+    } catch (error) {
+      this.errorHandler.handleToolError(error, 'munch-ddb', 'DDB content munch');
+    }
   }
 
   async handleImportDDBCharacter(args: any): Promise<any> {

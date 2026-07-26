@@ -69,6 +69,9 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.request-player-rolls`] =
       this.handleRequestPlayerRolls.bind(this);
 
+    // Chat log read — session recap, "what was that roll for?" lookup
+    CONFIG.queries[`${modulePrefix}.read-chat-log`] = this.handleReadChatLog.bind(this);
+
     // Enhanced creature index for campaign analysis
     CONFIG.queries[`${modulePrefix}.getEnhancedCreatureIndex`] =
       this.handleGetEnhancedCreatureIndex.bind(this);
@@ -153,6 +156,9 @@ export class QueryHandlers {
     // Phase 3 (unblock): self-contained DDB character import.
     // Fetches from ddb-bridge proxy and builds the actor natively — no ddb-importer.
     CONFIG.queries[`${modulePrefix}.importDDBCharacter`] = this.handleImportDDBCharacter.bind(this);
+
+    // Drive ddb-importer's Muncher (monsters/spells/items/vehicles) via its api.
+    CONFIG.queries[`${modulePrefix}.munchDDB`] = this.handleMunchDDB.bind(this);
 
     // Build a scene + walls/doors/lights from Universal VTT geometry.
     CONFIG.queries[`${modulePrefix}.importSceneWithWalls`] =
@@ -705,6 +711,34 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to update journal content: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Read recent chat messages from game.messages. Filters by speaker / time /
+   * roll-only. Returns slim shape (id, timestamp, speaker, content strip,
+   * rolls). For session recap.
+   */
+  async handleReadChatLog(data: {
+    speakerName?: string;
+    sinceMinutesAgo?: number;
+    rollsOnly?: boolean;
+    limit?: number;
+  }): Promise<any> {
+    try {
+      // SECURITY: Silent GM validation — chat log reveals other players' rolls.
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      return await this.dataAccess.readChatLog(data ?? {});
+    } catch (error) {
+      throw new Error(
+        `Failed to read chat log: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
@@ -2023,6 +2057,27 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to import DDB character: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Run ddb-importer's Muncher for a content type.
+   */
+  private async handleMunchDDB(data: { type: string; ids?: number[] }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      if (!data?.type) {
+        throw new Error('type is required (monsters|spells|items|vehicles)');
+      }
+      return await this.dataAccess.munchDDB(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to munch DDB content: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

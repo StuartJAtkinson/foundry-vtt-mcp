@@ -9516,6 +9516,210 @@ export class FoundryDataAccess {
       message: `✅ Imported "${actor.name}" via ddb-importer (${itemCount} items) — ${url}`,
     };
   }
+
+  /**
+   * Run ddb-importer's Muncher — the same buttons the Muncher UI presses,
+   * via its public api.parse.* methods. Content lands in ddb-importer's
+   * configured compendiums with its Iconizer/images intact (that's the whole
+   * point: drive the addon, don't bypass it and lose art).
+   *
+   * ponytail: only the public parse surface (monsters/spells/items/vehicles).
+   * Species/classes/feats/backgrounds/adventures aren't on ddb-importer's
+   * public api — add via DDBMuncher.* only if needed. monsters/spells/vehicles
+   * munch per ddb-importer's own Muncher settings; items can be scoped by ids.
+   */
+  async munchDDB(data: { type: string; ids?: number[] }): Promise<any> {
+    this.validateFoundryState();
+    if ((game.system as any).id !== 'dnd5e') {
+      throw new Error('munchDDB requires the dnd5e game system');
+    }
+    const ddbModule = (game as any).modules.get('ddb-importer');
+    if (!ddbModule?.active) {
+      throw new Error('ddb-importer module is not installed/active in this world');
+    }
+    const parse = ddbModule.api?.parse;
+    if (!parse) {
+      throw new Error('ddb-importer api.parse is unavailable (update ddb-importer)');
+    }
+
+    const type = String(data?.type || '').toLowerCase();
+    let result: any;
+    switch (type) {
+      case 'monsters':
+        result = await parse.monsters();
+        break;
+      case 'spells':
+        result = await parse.spells();
+        break;
+      case 'vehicles':
+        result = await parse.vehicles();
+        break;
+      case 'items':
+        result = await parse.items(data.ids?.length ? { ids: data.ids } : {});
+        break;
+      default:
+        throw new Error(
+          `Unsupported munch type "${data?.type}". Use monsters|spells|items|vehicles.`
+        );
+    }
+
+    const count = Array.isArray(result) ? result.length : undefined;
+    this.auditLog('munchDDB', { type, count }, 'success');
+    return {
+      success: true,
+      type,
+      count,
+      message: `✅ Munched ${type}${count != null ? ` (${count} entries)` : ''} via ddb-importer`,
+    };
+  }
+
+  /**
+   * Read recent chat messages with optional filters.
+   * Used for session-recap automation: feed back the last few hours of chat
+   * to flag which rolls were for which skill checks.
+   *
+   * Filters (all optional):
+   *   - speakerName: substring match against alias or speaker actor name (case-insensitive)
+   *   - sinceMinutesAgo: window in minutes from now (default 180 = 3 hours)
+   *   - rollsOnly: only return messages containing roll data
+   *   - limit: max number of messages to return (default 50, max 500)
+   *
+   * Each message in the returned array has:
+   *   { id, timestamp, worldTime, speaker, isWhisper, isRoll, content (HTML stripped,
+   *   truncated), rolls: [{ formula, total, dice }] }
+   */
+  async readChatLog(data: {
+    speakerName?: string;
+    sinceMinutesAgo?: number;
+    rollsOnly?: boolean;
+    limit?: number;
+  }): Promise<{
+    success: boolean;
+    messageCount: number;
+    messages: Array<{
+      id: string;
+      timestamp: number;
+      worldTime: number | null;
+      speaker: string;
+      isWhisper: boolean;
+      isRoll: boolean;
+      content: string;
+      rolls: Array<{
+        formula: string;
+        total: number;
+        dice: Array<{ faces: number; result: number }>;
+      }>;
+    }>;
+    error?: string;
+  }> {
+    this.validateFoundryState();
+
+    const sinceMinutesAgo = Math.max(1, Math.min(data?.sinceMinutesAgo ?? 180, 24 * 60));
+    const limit = Math.max(1, Math.min(data?.limit ?? 50, 500));
+    const cutoffMs = Date.now() - sinceMinutesAgo * 60 * 1000;
+    const speakerMatch = data?.speakerName?.toLowerCase().trim() || null;
+    const rollsOnly = Boolean(data?.rollsOnly);
+
+    try {
+      const messagesColl = (game as any).messages;
+      if (!messagesColl) {
+        return {
+          success: false,
+          error: 'game.messages not available',
+          messageCount: 0,
+          messages: [],
+        };
+      }
+
+      // game.messages in Foundry v13 is a Documents collection with a .contents
+      // array; expose .filter() for type safety.
+      const all: any[] = Array.from(messagesColl.contents ?? messagesColl);
+
+      // Pull from the bottom of the relevant window
+      const inWindow = all.filter((m: any) => {
+        const ts = (m.timestamp ?? m.created) * 1000;
+        return ts >= cutoffMs;
+      });
+
+      const stripHtml = (html: string): string =>
+        String(html || '')
+          .replace(/<br\s*\/?>/gi, ' ')
+          .replace(/<[^>]+>/g, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 400);
+
+      const summariseRolls = (rolls: any[] | undefined) => {
+        if (!rolls || !Array.isArray(rolls) || rolls.length === 0) return [];
+        return rolls.map((r: any) => {
+          const dice: Array<{ faces: number; result: number }> = [];
+          // Foundry Roll: r.terms[].results[] = { result, ... } for DiceTerm
+          for (const term of r.terms || []) {
+            if (!term || typeof term !== 'object') continue;
+            if (term.class === 'DiceTerm' || Array.isArray(term.results)) {
+              const faces = Number(term.faces ?? 0);
+              for (const res of term.results || []) {
+                if (res && Number.isFinite(Number(res.result))) {
+                  dice.push({ faces, result: Number(res.result) });
+                }
+              }
+            }
+          }
+          return {
+            formula: String(r.formula ?? ''),
+            total: Number(r.total ?? 0),
+            dice,
+          };
+        });
+      };
+
+      const filtered = inWindow
+        .filter((m: any) => {
+          if (rollsOnly && !(m.rolls && m.rolls.length > 0)) return false;
+          if (!speakerMatch) return true;
+          const alias = String(m.alias ?? '').toLowerCase();
+          const speakerId = (m.speaker && (m.speaker as any).actor) || null;
+          // speaker.actor lookup is async-bound; cheaper to compare alias + RAW speaker
+          // plus a substring on content so nicknames match too
+          if (alias.includes(speakerMatch)) return true;
+          const content = stripHtml(m.content || '').toLowerCase();
+          if (
+            content.includes(`[${data!.speakerName?.toLowerCase()}]`) ||
+            content.includes(` ${data!.speakerName?.toLowerCase()} `)
+          ) {
+            return true;
+          }
+          // For speaker.actor: skip per-message lookup; rely on alias/content match.
+          // If caller really needs actor-resolved filter, they can read and post-filter.
+          void speakerId;
+          return false;
+        })
+        .sort((a: any, b: any) => (b.timestamp ?? 0) - (a.timestamp ?? 0))
+        .slice(0, limit);
+
+      const out = filtered.map((m: any) => ({
+        id: String(m.id ?? m._id ?? ''),
+        timestamp: Number(m.timestamp ?? m.created ?? 0) * 1000,
+        worldTime: typeof m.worldTime === 'number' ? m.worldTime : null,
+        speaker: String(m.alias ?? m.speaker?.alias ?? 'Unknown'),
+        isWhisper: Boolean(m.whisper && (Array.isArray(m.whisper) ? m.whisper.length > 0 : true)),
+        isRoll:
+          Boolean(m.rolls && m.rolls.length > 0) ||
+          m.type === 5 /* CONST.CHAT_MESSAGE_TYPES.ROLL in v13 */,
+        content: stripHtml(m.content || ''),
+        rolls: summariseRolls(m.rolls),
+      }));
+
+      return { success: true, messageCount: out.length, messages: out };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error reading chat',
+        messageCount: 0,
+        messages: [],
+      };
+    }
+  }
 }
 
 // =============================================================================
