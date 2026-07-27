@@ -178,6 +178,26 @@ export class TokenManipulationTools {
           properties: {},
         },
       },
+      {
+        name: 'delete-actors',
+        description:
+          'Delete one or more actors by id and/or by name. Resolves names against the world’s actor collection, then calls Foundry’s Actor.deleteDocuments. GM-only. No undo, no confirmation prompt.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            actorIds: {
+              type: 'array',
+              description: 'Array of actor ids to delete.',
+              items: { type: 'string' },
+            },
+            names: {
+              type: 'array',
+              description: 'Actor names to resolve and delete (case-insensitive).',
+              items: { type: 'string' },
+            },
+          },
+        },
+      },
     ];
   }
 
@@ -425,6 +445,30 @@ export class TokenManipulationTools {
       this.logger.error('Failed to get available conditions', error);
       throw new Error(
         `Failed to get available conditions: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  async handleDeleteActors(args: any): Promise<any> {
+    const schema = z.object({
+      actorIds: z.array(z.string()).optional(),
+      names: z.array(z.string()).optional(),
+    });
+    const parsed = schema.parse(args);
+    if (!parsed.actorIds?.length && !parsed.names?.length) {
+      return { success: false, error: 'Provide actorIds and/or names' };
+    }
+    this.logger.info('Deleting actors', {
+      ids: parsed.actorIds?.length || 0,
+      names: parsed.names?.length || 0,
+    });
+    try {
+      const result = await this.foundryClient.query('foundry-mcp-bridge.deleteActors', parsed);
+      return result;
+    } catch (error) {
+      this.logger.error('Failed to delete actors', error);
+      throw new Error(
+        `Failed to delete actors: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

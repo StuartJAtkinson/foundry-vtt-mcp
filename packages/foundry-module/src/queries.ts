@@ -131,6 +131,9 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.move-token`] = this.handleMoveToken.bind(this);
     CONFIG.queries[`${modulePrefix}.update-token`] = this.handleUpdateToken.bind(this);
     CONFIG.queries[`${modulePrefix}.delete-tokens`] = this.handleDeleteTokens.bind(this);
+
+    // GM-only actor deletion (id or name resolution).
+    CONFIG.queries[`${modulePrefix}.deleteActors`] = this.handleDeleteActors.bind(this);
     CONFIG.queries[`${modulePrefix}.get-token-details`] = this.handleGetTokenDetails.bind(this);
     CONFIG.queries[`${modulePrefix}.toggle-token-condition`] =
       this.handleToggleTokenCondition.bind(this);
@@ -1431,6 +1434,29 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to delete tokens: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Delete actors by id or name. GM-only; no undo.
+   */
+  private async handleDeleteActors(data: { actorIds?: string[]; names?: string[] }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      const ids = Array.isArray(data?.actorIds) ? data.actorIds : [];
+      const names = Array.isArray(data?.names) ? data.names : [];
+      if (!ids.length && !names.length) {
+        throw new Error('Provide actorIds and/or names to delete');
+      }
+      return await this.dataAccess.deleteActors({ actorIds: ids, names });
+    } catch (error) {
+      throw new Error(
+        `Failed to delete actors: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

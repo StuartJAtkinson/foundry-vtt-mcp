@@ -1742,6 +1742,11 @@ async function startBackend(): Promise<void> {
 
                   break;
 
+                case 'delete-actors':
+                  result = await tokenManipulationTools.handleDeleteActors(args);
+
+                  break;
+
                 case 'get-token-details':
                   result = await tokenManipulationTools.handleGetTokenDetails(args);
 

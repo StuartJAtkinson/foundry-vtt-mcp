@@ -7374,6 +7374,47 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Delete actors by id or name. Resolves names to ids against the world's
+   * actor collection, then calls Actor.deleteDocuments (canonical Foundry API).
+   * ponytail: no undo, no confirmation prompt — caller is responsible. Bulk.
+   */
+  async deleteActors(data: { actorIds?: string[]; names?: string[] }): Promise<any> {
+    this.validateFoundryState();
+    const ids = Array.isArray(data?.actorIds) ? data.actorIds.slice() : [];
+    if (Array.isArray(data?.names)) {
+      for (const name of data.names) {
+        const found = (game as any).actors?.find(
+          (a: any) => a.name?.toLowerCase() === String(name).toLowerCase()
+        );
+        if (found) ids.push(found.id);
+      }
+    }
+    if (!ids.length) {
+      throw new Error('Provide actorIds and/or names to delete');
+    }
+    const resolved = ids.filter(id => (game as any).actors?.get(id));
+    const missing = ids.filter(id => !(game as any).actors?.get(id));
+    if (!resolved.length) {
+      throw new Error(`No matching actors found (ids/names unknown: ${missing.join(', ')})`);
+    }
+    await (Actor as any).deleteDocuments(resolved);
+    this.auditLog(
+      'deleteActors',
+      { requested: ids.length, deleted: resolved.length, missing },
+      'success'
+    );
+    return {
+      success: true,
+      requested: ids.length,
+      deleted: resolved.length,
+      missing: missing.length ? missing : undefined,
+      message:
+        `✅ Deleted ${resolved.length} actor(s)` +
+        (missing.length ? `; ${missing.length} not found` : ''),
+    };
+  }
+
+  /**
    * Get detailed information about a token
    */
   async getTokenDetails(data: { tokenId: string }): Promise<any> {
