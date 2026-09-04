@@ -52,6 +52,36 @@
       "invalidQuery": "Invalid query parameters provided",
       "foundryNotReady": "Foundry VTT is not ready",
       "noActiveWorld": "No active world loaded"
+    },
+    "eci": {
+      "title": "Enhanced Creature Index",
+      "description": "The Enhanced Creature Index pre-computes creature statistics for instant filtering by Challenge Rating, creature type, and abilities. This enables AI models to quickly find creatures matching specific criteria without loading every compendium entry.",
+      "manualRebuild": "Manual Rebuild",
+      "manualRebuildHint": "Use this if creature searches aren't working correctly or after adding new compendium packs. The rebuild takes ~30–60 seconds depending on the number of packs.",
+      "rebuildIndex": "Rebuild Creature Index",
+      "settings": "Settings",
+      "enable": "Enable Enhanced Creature Index",
+      "enableHint": "Pre-build a searchable database for instant filtering by CR, type, and abilities.",
+      "autoRebuild": "Auto-Rebuild Index on Pack Changes",
+      "autoRebuildHint": "Automatically rebuild when compendium packs are modified.",
+      "saveSettings": "Save Settings"
+    },
+    "comfyui": {
+      "title": "Map Generation Service",
+      "description": "Configure your AI-powered battlemap creation service. ComfyUI runs locally on the same machine as your MCP server (where Claude Desktop is installed).",
+      "serviceStatus": "Service Status",
+      "checkStatus": "Check Status",
+      "startService": "Start Service",
+      "stopService": "Stop Service",
+      "serviceSettings": "Service Settings",
+      "autoStart": "Auto-start Map Generation Service",
+      "autoStartHint": "Automatically start ComfyUI when Foundry loads.",
+      "generationQuality": "Generation Quality",
+      "qualityLow": "Low",
+      "qualityMedium": "Medium",
+      "qualityHigh": "High",
+      "generationQualityHint": "Higher quality = better detail but slower generation. Generation time depends on your hardware.",
+      "applySettings": "Apply Settings"
     }
   }
 }
