@@ -50,7 +50,7 @@ Claude Code ──stdio──> frontend (index.bundle.cjs)
 - Backend bundle: `…\packages\mcp-server\dist\backend.bundle.cjs`
 - Our added tool: `…\packages\mcp-server\src\tools\ddb-importer.ts`
   (+ 4 edits in `…\src\backend.ts`)
-- Git remote: `https://github.com/adambdooley/foundry-vtt-mcp.git`
+- Git remote: `https://github.com/StuartJAtkinson/foundry-vtt-mcp.git`
 
 ### Foundry-side module (lives in Foundry Data)
 
